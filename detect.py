@@ -22,11 +22,19 @@ DATABASE_URL = os.getenv("DATABASE_URL")
 
 app = FastAPI()
 
+from google.oauth2 import service_account
+
 class GoogleCloudManager:
     @staticmethod
     def upload_to_gcs(file: UploadFile):
         file.filename = f"{uuid.uuid4()}.jpg"
-        bucket = storage.Client().bucket(GCS_BUCKET_NAME)
+
+        credentials = service_account.Credentials.from_service_account_file(
+            os.getenv("GOOGLE_APPLICATION_CREDENTIALS")
+        )
+        client = storage.Client(credentials=credentials)
+
+        bucket = client.bucket(GCS_BUCKET_NAME)
         blob = bucket.blob(file.filename)
         blob.upload_from_file(file.file, content_type=file.content_type)
         blob.make_public()
@@ -199,3 +207,12 @@ async def detect_foods(file: UploadFile = File(...)):
 @app.post("/detect-ingredients/")
 async def detect_ingredients(file: UploadFile = File(...)):
     return await IngredientsDetection.analyze_ingredients(file)
+
+
+@app.get("/")
+def read_root():
+    return {"message": "API is running"}
+
+if __name__ == "__main__":
+    port = int(os.environ.get("PORT", 8080))
+    uvicorn.run(app, host="0.0.0.0", port=port)
