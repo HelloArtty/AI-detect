@@ -4,8 +4,6 @@ WORKDIR /app
 
 COPY . .
 
-COPY ai-rec-450910-75e45f268a0a.json /app/credentials/
-ENV GOOGLE_APPLICATION_CREDENTIALS="/app/credentials/ai-rec-450910-75e45f268a0a.json"
 
 # Install system dependencies for psycopg2
 RUN apt-get update && apt-get install -y \
