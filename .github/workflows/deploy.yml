@@ -27,7 +27,7 @@ jobs:
 
       - name: Deploy to Cloud Run
         run: |
-          gcloud run deploy my-app \
+          gcloud run deploy ai-se \
             --image gcr.io/ai-rec-450910/ai-se \
             --platform managed \
             --region asia-southeast1 \
