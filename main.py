@@ -212,7 +212,9 @@ async def detect_ingredients(file: UploadFile = File(...)):
 @app.get("/")
 def read_root():
     return {"message": "API is running"}
+
+
 # สร้างฟังก์ชันสำหรับรัน API ด้วย Uvicorn
 if __name__ == "__main__":
-    port = int(os.environ.get("PORT", 8080))
-    uvicorn.run(app, host="0.0.0.0", port=port)
+    import uvicorn
+    uvicorn.run(app, host="0.0.0.0", port=8080)

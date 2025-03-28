@@ -145,7 +145,8 @@ venv.bak/
 
 # mkdocs documentation
 /site
-/ai-rec-450910-75e45f268a0a.json
+ai-rec-450910-e6d7e520d2bd.json
+.json
 # mypy
 .mypy_cache/
 .dmypy.json
