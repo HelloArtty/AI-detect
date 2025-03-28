@@ -17,9 +17,8 @@ openai.api_key = os.getenv("OPENAI_API_KEY")
 
 # ตั้งค่า Google Cloud Storage
 GCS_BUCKET_NAME = os.getenv("GCS_BUCKET_NAME")
-GCS_CREDENTIALS = os.getenv("GOOGLE_APPLICATION_CREDENTIALS")
+GOOGLE_APPLICATION_CREDENTIALS = os.getenv("GOOGLE_APPLICATION_CREDENTIALS")
 DATABASE_URL = os.getenv("DATABASE_URL")
-os.environ["GOOGLE_APPLICATION_CREDENTIALS"] = GCS_CREDENTIALS
 
 app = FastAPI()
 
@@ -47,7 +46,7 @@ class DatabaseManager:
 
 class FoodDetection:
     @staticmethod
-    async def analyze_image(file: UploadFile):
+    async def analyze_food(file: UploadFile):
         image_url = GoogleCloudManager.upload_to_gcs(file)
         prompt = '''
             จากภาพนี้ ช่วยวิเคราะห์และบอกชื่ออาหารที่ปรากฏอยู่ในภาพนี้ให้แม่นยำที่สุด
@@ -77,6 +76,7 @@ class FoodDetection:
             try:
                 cleaned = json.loads(cleaned_response)
                 food_name = cleaned[0] if isinstance(cleaned, list) and cleaned else None
+                recipes_ai = [{"recipes_id": 0, "recipes_name": food_name}] if food_name else []
                 if not food_name:
                     return JSONResponse(content={"error": "รูปแบบข้อมูลไม่ถูกต้อง"}, status_code=400)
             except json.JSONDecodeError:
@@ -90,17 +90,13 @@ class FoodDetection:
                     ('%' + food_name + '%',)
                 )
                 rows = cursor.fetchall()
-                matched = [{"id": row[0], "name": row[1]} for row in rows] if rows else []
-                return {"food_name": food_name, "recipes": matched or "ไม่พบเมนูอาหารที่ตรงกับชื่ออาหารที่ระบุ"}
+                matched = [{"recipes_id": row[0], "recipes_name": row[1]} for row in rows] if rows else []
+                return {"recipes_ai": recipes_ai, "recipes": matched or "ไม่พบเมนูอาหารที่ตรงกับชื่ออาหารที่ระบุ"}
             finally:
                 cursor.close()
                 conn.close()
         finally:
             GoogleCloudManager.delete_from_gcs(image_url)
-
-@app.post("/detect-foods/")
-async def detect_foods(file: UploadFile = File(...)):
-    return await FoodDetection.analyze_image(file)
 
 class IngredientsDetection:
     @staticmethod
@@ -151,35 +147,55 @@ class IngredientsDetection:
                 ],
                 max_tokens=200,
             )
-
             # ดึงข้อความจาก AI และแปลงเป็น JSON
             ai_response = response["choices"][0]["message"]["content"]
             # print(ai_response)
             cleaned_response = ai_response.replace("```json", "").replace("```", "").strip()
-
             try:
                 cleaned = json.loads(cleaned_response)  # แปลงข้อความ JSON เป็น List
                 if len(cleaned) == 2 and len(cleaned[0]) == len(cleaned[1]):  # ตรวจสอบข้อมูล
-                    # สร้าง dictionary ที่มี key เป็นตัวเลขและ value เป็นคำศัพท์
-                    ingredients_dict = {
-                        "ingredients": {
-                            str(index): {
-                                "th": th_word,
-                                "en": en_word
-                            } for index, (th_word, en_word) in enumerate(zip(cleaned[0], cleaned[1]))
-                        }
-                    }
+                    ingredients_dict = [
+                        {
+                            "id": index,
+                            "ingredient_name": th_word,
+                            "ingredient_name_eng": en_word
+                        } for index, (th_word, en_word) in enumerate(zip(cleaned[0], cleaned[1]))
+                    ]
+                    # เชื่อมต่อฐานข้อมูล
+                    conn = DatabaseManager.get_db_connection()
+                    try:
+                        cursor = conn.cursor()
+                        ingredients = []
+
+                        for th_word in cleaned[0]:  # วนลูปเช็คแต่ละวัตถุดิบ
+                            cursor.execute(
+                                "SELECT ingredient_id, ingredient_name, ingredient_name_eng FROM ingredients WHERE ingredient_name LIKE %s",
+                                ('%' + th_word + '%',)
+                            )
+                            rows = cursor.fetchall()
+                            if rows:
+                                ingredients.extend([
+                                    {"id": row[0], "ingredient_name": row[1], "ingredient_name_eng": row[2]} for row in rows
+                                ])
+
+                        if ingredients:
+                            return JSONResponse(content={"ingredients_ai":ingredients_dict,"ingredients": ingredients}, status_code=200)
+                        else:
+                            return JSONResponse(content={"error": "ไม่พบวัตถุดิบที่ตรงกับชื่อที่ระบุ"}, status_code=400)
+                    finally:
+                        cursor.close()
+                        conn.close()
                 else:
                     return JSONResponse(content={"error": "รูปแบบข้อมูลไม่ถูกต้อง"}, status_code=400)
             except json.JSONDecodeError:
                 return JSONResponse(content={"error": "ไม่สามารถแปลง JSON ได้"}, status_code=400)
-            return JSONResponse(content=ingredients_dict, media_type="application/json")
         finally:
             GoogleCloudManager.delete_from_gcs(image_url)
+
+@app.post("/detect-foods/")
+async def detect_foods(file: UploadFile = File(...)):
+    return await FoodDetection.analyze_food(file)
 
 @app.post("/detect-ingredients/")
 async def detect_ingredients(file: UploadFile = File(...)):
     return await IngredientsDetection.analyze_ingredients(file)
-
-if __name__ == "__main__":
-    uvicorn.run("detect:app", host="0.0.0.0", port=8001, reload=True)
