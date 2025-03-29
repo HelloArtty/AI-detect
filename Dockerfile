@@ -4,8 +4,6 @@ WORKDIR /app
 
 COPY . /app
 
-COPY ai-rec-450910-e6d7e520d2bd.json /app
-
 # Install system dependencies for psycopg2
 RUN apt-get update && apt-get install -y \
     gcc \
