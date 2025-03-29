@@ -2,12 +2,12 @@ import psycopg2
 from fastapi import FastAPI, UploadFile, File
 from fastapi.responses import JSONResponse
 import os
-import uuid
 import json
 import dotenv
 import openai
 import uvicorn
-from google.cloud import storage
+import cloudinary
+import cloudinary.uploader
 
 # โหลด ENV
 dotenv.load_dotenv()
@@ -17,35 +17,28 @@ openai.api_key = os.getenv("OPENAI_API_KEY")
 
 # ตั้งค่า Google Cloud Storage
 GCS_BUCKET_NAME = os.getenv("GCS_BUCKET_NAME")
-GOOGLE_APPLICATION_CREDENTIALS = os.getenv("GOOGLE_APPLICATION_CREDENTIALS")
 DATABASE_URL = os.getenv("DATABASE_URL")
 
 app = FastAPI()
 
-from google.oauth2 import service_account
-
-class GoogleCloudManager:
+class CloudinaryManager:
     @staticmethod
-    def upload_to_gcs(file: UploadFile):
-        file.filename = f"{uuid.uuid4()}.jpg"
-
-        credentials = service_account.Credentials.from_service_account_file(
-            os.getenv("GOOGLE_APPLICATION_CREDENTIALS")
+    def upload_to_cloudinary(file: UploadFile):
+        # ตั้งค่าการเชื่อมต่อ Cloudinary
+        cloudinary.config(
+            cloud_name=os.getenv("CLOUDINARY_CLOUD_NAME"),
+            api_key=os.getenv("CLOUDINARY_API_KEY"),
+            api_secret=os.getenv("CLOUDINARY_API_SECRET")
         )
-        client = storage.Client(credentials=credentials)
-
-        bucket = client.bucket(GCS_BUCKET_NAME)
-        blob = bucket.blob(file.filename)
-        blob.upload_from_file(file.file, content_type=file.content_type)
-        blob.make_public()
-        return blob.public_url
+        # อัปโหลดไฟล์ไปยัง Cloudinary
+        response = cloudinary.uploader.upload(file.file, resource_type="image")
+        return response.get("secure_url")
 
     @staticmethod
-    def delete_from_gcs(public_url: str):
-        bucket = storage.Client().bucket(GCS_BUCKET_NAME)
-        blob_name = public_url.split("/")[-1]
-        blob = bucket.blob(blob_name)
-        blob.delete()
+    def delete_from_cloudinary(public_url: str):
+        # ดึง public_id จาก URL
+        public_id = public_url.split("/")[-1].split(".")[0]
+        cloudinary.uploader.destroy(public_id)
 
 class DatabaseManager:
     @staticmethod
@@ -55,7 +48,7 @@ class DatabaseManager:
 class FoodDetection:
     @staticmethod
     async def analyze_food(file: UploadFile):
-        image_url = GoogleCloudManager.upload_to_gcs(file)
+        image_url = CloudinaryManager.upload_to_cloudinary(file)
         prompt = '''
             จากภาพนี้ ช่วยวิเคราะห์และบอกชื่ออาหารที่ปรากฏอยู่ในภาพนี้ให้แม่นยำที่สุด
             - ตอบเฉพาะชื่ออาหารที่มั่นใจที่สุดว่าคืออะไร
@@ -104,12 +97,12 @@ class FoodDetection:
                 cursor.close()
                 conn.close()
         finally:
-            GoogleCloudManager.delete_from_gcs(image_url)
+            CloudinaryManager.delete_from_cloudinary(image_url)
 
 class IngredientsDetection:
     @staticmethod
     async def analyze_ingredients(file: UploadFile):
-        image_url = GoogleCloudManager.upload_to_gcs(file)
+        image_url = CloudinaryManager.upload_to_cloudinary(file)
         prompt = '''
                 บอกชื่อวัตถุดิบที่ปรากฏในภาพเป็นภาษาไทยและภาษาอังกฤษในรูปแบบ array เช่น [["ข้าว", "ปลา"], ["rice", "fish"]]
                 ### ข้อกำหนด:
@@ -198,7 +191,7 @@ class IngredientsDetection:
             except json.JSONDecodeError:
                 return JSONResponse(content={"error": "ไม่สามารถแปลง JSON ได้"}, status_code=400)
         finally:
-            GoogleCloudManager.delete_from_gcs(image_url)
+            CloudinaryManager.delete_from_cloudinary(image_url)
 
 @app.post("/detect-foods/")
 async def detect_foods(file: UploadFile = File(...)):
@@ -216,5 +209,5 @@ def read_root():
 
 # สร้างฟังก์ชันสำหรับรัน API ด้วย Uvicorn
 if __name__ == "__main__":
-    port = int(os.getenv("PORT", 8000))  # Default to 8000 if PORT is not set
+    port = int(os.getenv("PORT", 8080))
     uvicorn.run(app, host="0.0.0.0", port=port)
