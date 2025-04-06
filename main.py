@@ -1,5 +1,5 @@
 import psycopg2
-from fastapi import FastAPI, UploadFile, File
+from fastapi import FastAPI, UploadFile, File, HTTPException
 from fastapi.responses import JSONResponse
 import os
 import json
@@ -8,18 +8,30 @@ import openai
 import uvicorn
 import cloudinary
 import cloudinary.uploader
+from fastapi.middleware.cors import CORSMiddleware
+from psycopg2.extras import RealDictCursor
 
 # โหลด ENV
 dotenv.load_dotenv()
 
 # ตั้งค่า API Key ของ OpenAI
 openai.api_key = os.getenv("OPENAI_API_KEY")
-
-# ตั้งค่า Google Cloud Storage
-GCS_BUCKET_NAME = os.getenv("GCS_BUCKET_NAME")
 DATABASE_URL = os.getenv("DATABASE_URL")
 
 app = FastAPI()
+
+origins = [
+    "http://localhost:3000",
+    "https://kidney-care.vercel.app"
+]
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=origins,
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 class CloudinaryManager:
     @staticmethod
@@ -43,7 +55,21 @@ class CloudinaryManager:
 class DatabaseManager:
     @staticmethod
     def get_db_connection():
-        return psycopg2.connect(DATABASE_URL)
+        try:
+            connection = psycopg2.connect(DATABASE_URL, sslmode='require')
+            connection.autocommit = True
+            # ตรวจสอบการเชื่อมต่อ
+            cursor = connection.cursor()
+            cursor.execute("SELECT 1")
+            result = cursor.fetchone()
+            if result[0] != 1:
+                raise Exception("Database connection failed")
+            cursor.close()
+            print("✅ Database connection established successfully")
+            return connection
+        except Exception as e:
+            print(f"❌ Error connecting to the database: {e}")
+            raise HTTPException(status_code=500, detail="Database connection error")
 
 class FoodDetection:
     @staticmethod
@@ -152,6 +178,7 @@ class IngredientsDetection:
             ai_response = response["choices"][0]["message"]["content"]
             # print(ai_response)
             cleaned_response = ai_response.replace("```json", "").replace("```", "").strip()
+            # print(cleaned_response)
             try:
                 cleaned = json.loads(cleaned_response)  # แปลงข้อความ JSON เป็น List
                 if len(cleaned) == 2 and len(cleaned[0]) == len(cleaned[1]):  # ตรวจสอบข้อมูล
@@ -164,11 +191,12 @@ class IngredientsDetection:
                     ]
                     # เชื่อมต่อฐานข้อมูล
                     conn = DatabaseManager.get_db_connection()
+                    cursor = conn.cursor(cursor_factory=RealDictCursor)
                     try:
                         cursor = conn.cursor()
                         ingredients = []
 
-                        for th_word in cleaned[0]:  # วนลูปเช็คแต่ละวัตถุดิบ
+                        for th_word in cleaned[0]:
                             cursor.execute(
                                 "SELECT ingredient_id, ingredient_name, ingredient_name_eng FROM ingredients WHERE ingredient_name LIKE %s",
                                 ('%' + th_word + '%',)
@@ -210,4 +238,4 @@ def read_root():
 # สร้างฟังก์ชันสำหรับรัน API ด้วย Uvicorn
 if __name__ == "__main__":
     port = int(os.getenv("PORT", 8080))
-    uvicorn.run(app, host="0.0.0.0", port=port)
+    uvicorn.run("main:app", host="0.0.0.0", port=port, reload=True)
